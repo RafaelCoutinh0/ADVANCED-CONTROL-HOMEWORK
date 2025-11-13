@@ -233,7 +233,7 @@ grid = linspace(0, tfinal, 100)
 
 F = integrator('F', 'idas', dae, 0, grid)
 
-#%% Linearization with Casadi and State-Space and Transfer Function
+#%% Linearization with Casadi and State-Space
 
 um_ss = u0.copy()
 
@@ -265,13 +265,6 @@ J_g_x_ss = array([array(J(0, *x_ss, *z_ss, *u0)).reshape(14) for J in J_g_x_fun]
 
 sys = ss(J_x_ss, J_u_ss, eye(14, 14), zeros((14, 10)))
 
-sys_TF_data_num = []
-sys_TF_data_den = []
-
-for i in range(9):
-    sys_TF_data_num.append([])
-    sys_TF_data_den.append([])
-
 y_ss = [concatenate((x_ss,z_ss))[i] for i in [0,3,6,9,12,14,15,16,17,18,19,20,21]] # pman, pfbhp_i, p_intake_i, dP_bcs_i
 
 Ty = inv(diag(y_ss))   # tabela de transformação de y  
@@ -289,14 +282,6 @@ C = delete(C_all,[1,2,4,5,7,8,10,11,13],0)
 C = Ty.dot(C.dot(diag(x_ss)))
 
 A = inv(diag(x_ss)).dot(J_x_ss).dot(diag(x_ss))
-
-for j in range(9):
-    data_TF_i = ss2tf(A, B, C, zeros((13, 9)), input=j)
-    for i in range(9):
-        sys_TF_data_num[i].append(data_TF_i[0][i, :].tolist())
-        sys_TF_data_den[i].append(data_TF_i[1].tolist())
-
-sys_tf = tf(sys_TF_data_num, sys_TF_data_den)
 
 sys_measured = ss(A, B, C, zeros((13, 9)))
 
