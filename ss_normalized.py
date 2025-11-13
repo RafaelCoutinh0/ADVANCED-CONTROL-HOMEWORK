@@ -18,7 +18,9 @@ from numpy import linspace, array, eye, zeros, repeat, concatenate, delete, diag
 from numpy.linalg import inv
 from matplotlib.pyplot import plot, figure
 from matplotlib.ticker import AutoMinorLocator, ScalarFormatter
-
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import rcParams
 from scipy.optimize import fsolve
 from control import ss, tf, sample_system, forced_response
 from scipy.signal import ss2tf
@@ -233,6 +235,7 @@ grid = linspace(0, tfinal, 100)
 
 F = integrator('F', 'idas', dae, 0, grid)
 
+res = F(x0 = x_ss, z0 = z_ss, p = u0)
 #%% Linearization with Casadi and State-Space
 
 um_ss = u0.copy()
@@ -284,7 +287,6 @@ C = Ty.dot(C.dot(diag(x_ss)))
 A = inv(diag(x_ss)).dot(J_x_ss).dot(diag(x_ss))
 
 sys_measured = ss(A, B, C, zeros((13, 9)))
-
 #%% Subsistemas modelos lineares
 # Subssitemas
 # x = [P_fbhp_i, P_choke_i, q_average_i]
@@ -297,3 +299,247 @@ sys_measured_well3 = ss(A[8:11,8:11], B[8:11,5:7], C[[3,9,10],8:11], zeros((3, 2
 sys_measured_well4 = ss(A[11:14,11:14], B[11:14,7:9], C[[4,11,12],11:14], zeros((3, 2)))
 
 sys_measured_mani = ss(A[0:2,0:2], B[0:2,0], C[0,0:2], zeros((1, 1)))
+
+from control.matlab import c2d
+Ts = 1  # tempo de amostragem igual ao usado na sua simulação fenomenológica
+sys_centralized = c2d(sys_measured, Ts, method='zoh')
+
+
+def plotar_graficos(n_pert):
+    global res
+    global tfinal
+
+    Lista_xf = []
+    Lista_zf = []
+    Lista_xf.append(res["xf"])
+    Lista_zf.append(res["zf"])
+    x0 = Lista_xf[-1][:, -1]
+    z0 = Lista_zf[-1][:, -1]
+    map_est = []
+    map_est.append(x0)
+    map_est.append(z0)
+    Lista_zf = np.array(Lista_zf)
+    Lista_xf = np.array(Lista_xf)
+    Lista_zf_reshaped = Lista_zf.reshape(8, 100)
+    Lista_xf_reshaped = Lista_xf.reshape(14, 100)
+
+    # criando as pertubações de u0
+    valve_open1 = np.random.uniform(.42, 1, n_pert)
+    valve_open2 = np.random.uniform(.42, 1, n_pert)
+    valve_open3 = np.random.uniform(.42, 1, n_pert)
+    valve_open4 = np.random.uniform(.42, 1, n_pert)
+    # bcs_freq1 = np.random.randint(35., 65., n_pert)
+    # bcs_freq2 = np.random.randint(35., 65., n_pert)
+    # bcs_freq3 = np.random.randint(35., 65., n_pert)
+    # bcs_freq4 = np.random.randint(35., 65., n_pert)
+    booster_freq = np.random.uniform(35., 65., n_pert)
+    p_topo = np.random.uniform(8, 12, n_pert)
+
+    grid_cont = 1
+    for i in range(n_pert):
+        grid_cont += 1
+        delta = 1000
+        grid = linspace(tfinal, tfinal + delta, 100)
+        tfinal += delta
+        u0 = [booster_freq[i], p_topo[i] ** 5, 50., valve_open1[i], 50., valve_open2[i], 50., valve_open3[i], 50.,
+              valve_open4[i]]
+        res = F(x0=x0, z0=z0, p=u0)
+        x0 = res["xf"][:, -1]
+        z0 = res["zf"][:, -1]
+        map_est.append(x0)
+        map_est.append(z0)
+
+        Lista_xf_reshaped = np.hstack((Lista_xf_reshaped, np.array(res["xf"])))
+        Lista_zf_reshaped = np.hstack((Lista_zf_reshaped, np.array(res["zf"])))
+
+        #Plotted Graphs
+        rcParams['axes.formatter.useoffset'] = False
+        grid = linspace(0, tfinal, 100 * grid_cont)
+
+    def Auto_plot(i, t, xl, yl, c):
+        plt.plot(grid, i.transpose(), c)
+        plt.title(t)
+        plt.xlabel(xl)
+        plt.ylabel(yl)
+        conc = np.concatenate(i)
+        y_min, y_max = np.min(conc), np.max(conc)
+        plt.ylim([y_min - 0.1 * abs(y_max), y_max + 0.1 * abs(y_max)])
+        plt.grid()
+        plt.show()
+
+    Auto_plot(Lista_zf_reshaped[[1, 3, 5, 7], :], "Pressure Discharge in ESP's", 'Time/(h)', 'Pressure/(bar)', 'b')
+    Auto_plot(Lista_xf_reshaped[[2, 5, 8, 11], :], "Pressure fbhp in ESP's", 'Time/(h)', 'Pressure/(bar)', 'r')
+    Auto_plot(Lista_xf_reshaped[[3, 6, 9, 12], :], 'Pressure in Chokes', 'Time/(h)', 'Pressure/(bar)', 'g')
+    Auto_plot(Lista_xf_reshaped[[4, 7, 10, 13], :], 'Average Flow in the Wells', 'Time/(h)', 'Flow Rate/(m^3/h)', 'k')
+    Auto_plot(Lista_xf_reshaped[[1], :], 'Flow Through the Transportation Line', 'Time/(h)', 'Flow Rate/(m^3/h)','y')
+    Auto_plot(Lista_xf_reshaped[[0], :], 'Manifold Pressure', 'Time/(h)', 'Pressure/(bar)', 'm')
+
+    #p_intake é desnecessário
+    # Auto_plot(Lista_zf_reshaped[[0, 2, 4, 6], :],"Pressure Intake in ESP's", 'Time/(h)', 'Pressure/(bar)')
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from control.matlab import c2d  # se ainda não discretizou
+
+def comparar_modelos_corrigido(n_pert, Ts=1):
+    """
+    Versão corrigida da sua função de comparação.
+    - Corrige o empilhamento das trajetórias fenomenológicas
+    - Normaliza entradas conforme u_ss (9 entradas)
+    - Verificações básicas impressas
+    """
+
+    global res, tfinal, F
+    global x_ss, z_ss, u_ss, y_ss, sys_centralized
+
+    # ----- Certifique-se de que sys_centralized é discreto -----
+    # Se sys_centralized foi gerado por sample_system já está discreto. Se não, discretize:
+    try:
+        # check if already has A matrix and is discrete (we assume user created sys_centralized)
+        Ad = np.array(sys_centralized.A)
+        Bd = np.array(sys_centralized.B)
+        Cd = np.array(sys_centralized.C)
+    except Exception as e:
+        # fallback: discretize continuous sys_measured se existir
+        raise RuntimeError("sys_centralized inexistente ou inválido. Crie sys_centralized (discreto) antes de chamar esta função.") from e
+
+    # prints para diagnóstico rápido
+    print("Shapes: A,B,C =", Ad.shape, Bd.shape, Cd.shape)
+    # checar estabilidade discreta
+    eigs = np.linalg.eigvals(Ad)
+    print("max |eig(Ad)| =", np.max(np.abs(eigs)))
+
+    A = Ad; B = Bd; C = Cd
+
+    # ---- Inicialização fenomenológica (usar res atual) ----
+    x_traj0 = np.array(res["xf"])   # shape (14, 100)
+    z_traj0 = np.array(res["zf"])   # shape (8, 100)
+    x0_F = x_traj0[:, -1].copy()
+    z0_F = z_traj0[:, -1].copy()
+
+    # iremos acumular no tempo com shapes (14, N) e (8, N)
+    Lista_xf = x_traj0.copy()
+    Lista_zf = z_traj0.copy()
+
+    # ---- Inicialização linear (normalizado) ----
+    nx = A.shape[0]
+    ny = C.shape[0]
+    xk = np.ones((nx, 1))           # estado normalizado inicial (x/x_ss = 1)
+    Lista_xL = xk.copy()
+    Lista_yL = C @ xk
+
+    # ---- Preparar perturbações (mesmas para ambos) ----
+    valve_open1 = np.random.uniform(.42, 1, n_pert)
+    valve_open2 = np.random.uniform(.42, 1, n_pert)
+    valve_open3 = np.random.uniform(.42, 1, n_pert)
+    valve_open4 = np.random.uniform(.42, 1, n_pert)
+    booster_freq = np.random.uniform(35., 65., n_pert)
+    p_topo = np.random.uniform(8, 12, n_pert)
+
+    tfinal = 0
+
+    # ---- u_ss vetor (9 entradas) ----
+    u_ss_vec = np.array(u_ss).reshape(-1)
+    if u_ss_vec.size != 9:
+        raise RuntimeError("u_ss tem tamanho inesperado (esperado 9). Verifique u_ss e a remoção de p_topside.")
+
+    # loop principal
+    for i in range(n_pert):
+        delta = 100
+        tfinal += delta
+
+        # ---------- Fenomenológico (10 entradas) ----------
+        u_F = [
+            booster_freq[i],
+            p_topo[i] ** 5,
+            50., valve_open1[i],
+            50., valve_open2[i],
+            50., valve_open3[i],
+            50., valve_open4[i]
+        ]
+        res_block = F(x0=x0_F, z0=z0_F, p=u_F)
+        x_traj_F = np.array(res_block["xf"])   # (14, 100)
+        z_traj_F = np.array(res_block["zf"])   # (8, 100)
+
+        # concatena corretamente (eixo tempo)
+        Lista_xf = np.hstack((Lista_xf, x_traj_F))
+        Lista_zf = np.hstack((Lista_zf, z_traj_F))
+
+        x0_F = x_traj_F[:, -1]
+        z0_F = z_traj_F[:, -1]
+
+        # ---------- Linear (9 entradas físicas -> normalizadas) ----------
+        uL_phys = np.array([
+            booster_freq[i],   # f_BP
+            50.,               # f_ESP_1
+            valve_open1[i],    # alpha_1
+            50.,               # f_ESP_2
+            valve_open2[i],    # alpha_2
+            50.,               # f_ESP_3
+            valve_open3[i],    # alpha_3
+            50.,               # f_ESP_4
+            valve_open4[i]     # alpha_4
+        ]).reshape(-1, 1)
+
+        # normalização (u_tilde = u_phys / u_ss)
+        uL_tilde = (uL_phys.flatten() / u_ss_vec).reshape(-1, 1)
+
+        # simula delta passos discretos
+        for k in range(delta):
+            xk = A @ xk + B @ uL_tilde
+            yk = C @ xk
+            Lista_xL = np.hstack((Lista_xL, xk))
+            Lista_yL = np.hstack((Lista_yL, yk))
+
+    # dessnormaliza saídas lineares (y_phys = y_tilde * y_ss)
+    y_ss_vec = np.array(y_ss).reshape(-1)
+    if y_ss_vec.size != Lista_yL.shape[0]:
+        print("ATENÇÃO: y_ss size", y_ss_vec.size, "!= Lista_yL rows", Lista_yL.shape[0])
+    Lista_yL_phys = (y_ss_vec.reshape(-1, 1) * Lista_yL)
+
+    # tempos
+    t_linear = np.arange(Lista_yL_phys.shape[1]) * Ts
+    t_fen = np.linspace(0, tfinal, Lista_xf.shape[1])
+
+    # função de plot (ajustada para pegar x ou z do fenomenológico)
+    def plot_comparacao_lin_fen(linear_idxs, fen_idxs, titulo, ylabel):
+        plt.figure(figsize=(9, 4))
+        # linear (cada idx)
+        for ii in np.atleast_1d(linear_idxs):
+            plt.plot(t_linear, Lista_yL_phys[int(ii), :], label=f'Linear idx {ii}')
+        # fenomenológico: fen_idxs são índices sobre concat(x,z)
+        for jj in np.atleast_1d(fen_idxs):
+            if jj < Lista_xf.shape[0]:
+                plt.plot(t_fen, Lista_xf[int(jj), :], '--', label=f'Fen x idx {jj}')
+            else:
+                zj = int(jj - Lista_xf.shape[0])
+                plt.plot(t_fen, Lista_zf[int(zj), :], '--', label=f'Fen z idx {zj}')
+        plt.title(titulo)
+        plt.xlabel('Tempo (s)')
+        plt.ylabel(ylabel)
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+
+    # gráficos comparativos (mesmos mapeamentos usados antes)
+    fen_dp_idx = [14 + j for j in [1, 3, 5, 7]]
+    plot_comparacao_lin_fen([1, 2, 3, 4], fen_dp_idx, "ΔP_BCS (1–4)", "Pressure (bar)")
+
+    plot_comparacao_lin_fen([5, 7, 9, 11], [2, 5, 8, 11], "FBHP (1–4)", "Pressure (bar)")
+
+    fen_intake_idx = [14 + j for j in [0, 2, 4, 6]]
+    plot_comparacao_lin_fen([6, 8, 10, 12], fen_intake_idx, "Intake Pressure (1–4)", "Pressure (bar)")
+
+    plot_comparacao_lin_fen([0], [0], "Manifold Pressure", "Pressure (bar)")
+
+    return {
+        'Lista_xf': Lista_xf,
+        'Lista_zf': Lista_zf,
+        'Lista_yL_phys': Lista_yL_phys,
+        'Lista_xL': Lista_xL
+    }
+
+# plotar_graficos(10)
+# Lista_x, Lista_y = simular_sys_centralized(10)
+out = comparar_modelos_corrigido(6, Ts=1)
